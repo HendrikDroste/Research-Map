@@ -1,0 +1,210 @@
+default:
+  tags:
+    - flk
+
+#only execute pipeline if merge into develop or main branches
+workflow:
+  rules:
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == 'develop'
+      when: always
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == 'main'
+      when: always  
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event' 
+    - when: never
+
+variables:
+  FLK_PATH: "zivgitlab.wwu.io/ml-de/teaching/ps-research-map"
+
+stages:
+  - test
+#build stage executed if merge requested into develop or main branches
+  - build
+#tag_latest stage executed if merge requested into main, tagging the built images with :latest
+  - tag_latest
+  - deploy
+
+test_exporter:
+  stage: test
+  image: python:3.9-slim-buster
+  script:
+    - export CRISETL_ENV_MONGO_URI=$MONGODB_BACKEND
+    - pip install --no-cache-dir -r ./Cris_exporter/requirements.txt
+    - python ./Cris_exporter/cris_test.py
+
+
+#building frontend image in dev mode using docker-in-docker, tagging it with the last commit sha and pushing it into the container registry
+#each image will only be created if changes to its respective directory are present
+build_frontend_dev:
+  stage: build
+  image: docker:20.10.16
+  services:
+    - docker:20.10.16-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - echo -n $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY
+  script:
+    - docker build -f ./frontend/next-flk/dev.Dockerfile -t $FLK_PATH/next-flk:dev$CI_COMMIT_SHORT_SHA ./frontend/next-flk
+    - docker push $FLK_PATH/next-flk:dev$CI_COMMIT_SHORT_SHA
+  after_script:
+    - docker logout $CI_REGISTRY
+  rules:
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == 'develop'
+      changes: 
+      - frontend/**/*
+      - .gitlab-ci.yml
+
+#build frontend image in production mode
+build_frontend_prod:
+  stage: build
+  image: docker:20.10.16
+  services:
+    - docker:20.10.16-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - echo -n $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY
+  script:
+    - docker build -f ./frontend/next-flk/dev.Dockerfile -t $FLK_PATH/next-flk:prod$CI_COMMIT_SHORT_SHA ./frontend/next-flk
+    - docker push $FLK_PATH/next-flk:prod$CI_COMMIT_SHORT_SHA
+  after_script:
+    - docker logout $CI_REGISTRY
+  rules:
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == 'main'
+
+
+build_cris_etl:
+  stage: build
+  image: docker:20.10.16
+  services:
+    - docker:20.10.16-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - echo -n $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY
+  script:
+    - docker build -f ./Cris_exporter/Dockerfile -t $FLK_PATH/cris_etl:$CI_COMMIT_SHORT_SHA ./Cris_exporter
+    - docker push $FLK_PATH/cris_etl:$CI_COMMIT_SHORT_SHA
+  after_script:
+    - docker logout $CI_REGISTRY
+  rules:
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == 'main'
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == 'develop'
+      changes: 
+      - Cris_exporter/**/*
+      - .gitlab-ci.yml
+
+build_web_pipeline:
+  stage: build
+  image: docker:20.10.16
+  services:
+    - docker:20.10.16-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - echo -n $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY
+  script:
+    - docker build -f ./web_pipeline/Dockerfile -t $FLK_PATH/web_pipeline:$CI_COMMIT_SHORT_SHA ./web_pipeline
+    - docker push $FLK_PATH/web_pipeline:$CI_COMMIT_SHORT_SHA
+  after_script:
+    - docker logout $CI_REGISTRY
+  rules:
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == 'main'
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == 'develop'
+      changes: 
+      - web_pipeline/**/*
+      - .gitlab-ci.yml
+
+
+build_meilisearch_pipeline:
+  stage: build
+  image: docker:20.10.16
+  services:
+    - docker:20.10.16-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - echo -n $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY
+  script:
+    - docker build -f ./Meilisearch/Dockerfile -t $FLK_PATH/meilisearch_pipeline:$CI_COMMIT_SHORT_SHA ./Meilisearch
+    - docker push $FLK_PATH/meilisearch_pipeline:$CI_COMMIT_SHORT_SHA
+  after_script:
+    - docker logout $CI_REGISTRY
+  rules:
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == 'main'
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == 'develop'
+      changes: 
+      - Meilisearch/**/*
+      - .gitlab-ci.yml
+
+build_scraper:
+  stage: build
+  image: docker:20.10.16
+  services:
+    - docker:20.10.16-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - echo -n $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY
+  script:
+    - docker build -f ./Data_Prep_Pipeline/Dockerfile -t $FLK_PATH/scraper:$CI_COMMIT_SHORT_SHA ./Data_Prep_Pipeline
+    - docker push $FLK_PATH/scraper:$CI_COMMIT_SHORT_SHA
+  after_script:
+    - docker logout $CI_REGISTRY
+  rules:
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == 'main'
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == 'develop'
+      changes: 
+      - Data_Prep_Pipeline/**/*
+      - .gitlab-ci.yml
+
+#pull images from container registry and additionally tag it with :latest and push back into container registry, preparing deployment
+push_latest_tags:
+  stage: tag_latest
+  rules:
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == 'main'
+  before_script:
+    - echo -n $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY
+  script:
+    - docker pull $FLK_PATH/next-flk:prod$CI_COMMIT_SHORT_SHA
+    - docker tag $FLK_PATH/next-flk:prod$CI_COMMIT_SHORT_SHA $FLK_PATH/next-flk:latest
+    - docker push $FLK_PATH/next-flk:latest
+
+    - docker pull $FLK_PATH/cris_etl:$CI_COMMIT_SHORT_SHA
+    - docker tag $FLK_PATH/cris_etl:$CI_COMMIT_SHORT_SHA $FLK_PATH/cris_etl:latest
+    - docker push $FLK_PATH/cris_etl:latest
+
+    - docker pull $FLK_PATH/web_pipeline:$CI_COMMIT_SHORT_SHA
+    - docker tag $FLK_PATH/web_pipeline:$CI_COMMIT_SHORT_SHA $FLK_PATH/web_pipeline:latest
+    - docker push $FLK_PATH/web_pipeline:latest
+
+    - docker pull $FLK_PATH/meilisearch_pipeline:$CI_COMMIT_SHORT_SHA
+    - docker tag $FLK_PATH/meilisearch_pipeline:$CI_COMMIT_SHORT_SHA $FLK_PATH/meilisearch_pipeline:latest
+    - docker push $FLK_PATH/meilisearch_pipeline:latest
+
+    - docker pull $FLK_PATH/scraper:$CI_COMMIT_SHORT_SHA
+    - docker tag $FLK_PATH/scraper:$CI_COMMIT_SHORT_SHA $FLK_PATH/scraper:latest
+    - docker push $FLK_PATH/scraper:latest
+
+  after_script:
+    - docker logout $CI_REGISTRY
+#delete all images older than 100h to clean up the VM
+    - docker image prune --filter "until=100h" --force
+
+#log into vm and pull :latest images, restart frontend to reflect changes
+deploy_latest:
+  stage: deploy
+  rules:
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == 'main'
+  before_script:
+    - chmod og= $SSH_KEY
+    - ssh -i $SSH_KEY -o StrictHostKeyChecking=no $FLK_USER@$FLK_SERVER_1 "echo -n $CI_REGISTRY_PASSWORD | sudo docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY"
+  script:
+    - ssh -i $SSH_KEY -o StrictHostKeyChecking=no $FLK_USER@$FLK_SERVER_1 "sudo docker pull $FLK_PATH/next-flk:latest"
+    - ssh -i $SSH_KEY -o StrictHostKeyChecking=no $FLK_USER@$FLK_SERVER_1 "sudo docker pull $FLK_PATH/meilisearch_pipeline:latest"
+    - ssh -i $SSH_KEY -o StrictHostKeyChecking=no $FLK_USER@$FLK_SERVER_1 "sudo docker pull $FLK_PATH/scraper:latest"
+    - ssh -i $SSH_KEY -o StrictHostKeyChecking=no $FLK_USER@$FLK_SERVER_1 "sudo docker pull $FLK_PATH/web_pipeline:latest"
+    - ssh -i $SSH_KEY -o StrictHostKeyChecking=no $FLK_USER@$FLK_SERVER_1 "sudo docker pull $FLK_PATH/cris_etl:latest" 
+    - ssh -i $SSH_KEY -o StrictHostKeyChecking=no $FLK_USER@$FLK_SERVER_1 "sudo docker compose -f /srv/flk/frontend/frontend-compose.yaml up --force-recreate -d"   
+  after_script:
+    - ssh -i $SSH_KEY -o StrictHostKeyChecking=no $FLK_USER@$FLK_SERVER_1 "echo -n $CI_REGISTRY_PASSWORD | sudo docker logout $CI_REGISTRY"
